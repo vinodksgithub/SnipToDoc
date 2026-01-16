@@ -7,27 +7,40 @@ namespace ScreenCaptureUtility
     {
         public static MenuStrip BuildMenu(MainForm form)
         {
-            // Create menu strip
             MenuStrip menuStrip = new MenuStrip();
 
-            // Top-level "Connect" menu
+            // ===== Edit Menu =====
+            ToolStripMenuItem editMenu = new ToolStripMenuItem("Edit");
+
+            ToolStripMenuItem undoItem = new ToolStripMenuItem("Undo");
+            undoItem.ShortcutKeys = Keys.Control | Keys.Z;
+            undoItem.Click += (s, e) => form.ImageEditor?.Undo();
+
+            ToolStripMenuItem redoItem = new ToolStripMenuItem("Redo");
+            redoItem.ShortcutKeys = Keys.Control | Keys.Y;
+            redoItem.Click += (s, e) => form.ImageEditor?.Redo();
+
+            editMenu.DropDownItems.Add(undoItem);
+            editMenu.DropDownItems.Add(redoItem);
+
+            // ===== Existing Connect Menu =====
             ToolStripMenuItem connectMenu = new ToolStripMenuItem("Connect");
 
-            // Sub-item: Connect ADO
             ToolStripMenuItem connectAdoItem = new ToolStripMenuItem("Connect ADO");
             connectAdoItem.Click += (s, e) => OnConnectAdo(form);
             connectMenu.DropDownItems.Add(connectAdoItem);
 
-            // Sub-item: Upload Evidence To Test
             ToolStripMenuItem uploadEvidenceItem = new ToolStripMenuItem("Upload Evidence To Test");
             uploadEvidenceItem.Click += (s, e) => OnUploadEvidence(form);
             connectMenu.DropDownItems.Add(uploadEvidenceItem);
 
-            // Add to menu strip
+            // Add menus
+            menuStrip.Items.Add(editMenu);
             menuStrip.Items.Add(connectMenu);
 
             return menuStrip;
         }
+
 
         private static void OnConnectAdo(MainForm form)
         {

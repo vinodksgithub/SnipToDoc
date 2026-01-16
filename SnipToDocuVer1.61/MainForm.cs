@@ -26,6 +26,9 @@ namespace ScreenCaptureUtility
         private SaveOptionsHandler _saveHandler;
         private Bitmap _currentCapture;
 
+        public ImageEditor ImageEditor => _imageEditor;
+
+
         public MainForm()
         {
             Text = "QA Evidence Capturer v1.61";

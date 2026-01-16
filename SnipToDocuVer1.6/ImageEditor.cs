@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -23,6 +24,10 @@ namespace ScreenCaptureUtility
         private Rectangle _currentImgRect;
         private GraphicsPath _penPath;
         private ContextMenuStrip _menu;
+
+        private Stack<Bitmap> _undoStack = new Stack<Bitmap>();
+        private Stack<Bitmap> _redoStack = new Stack<Bitmap>();
+
 
         public ImageEditor(PictureBox pictureBox)
         {
@@ -181,9 +186,41 @@ namespace ScreenCaptureUtility
 
         private void EraseAll()
         {
+            SaveStateForUndo();
             _overlayImage = new Bitmap(_baseImage.Width, _baseImage.Height);
             RefreshComposite();
         }
+
+        private void SaveStateForUndo()
+        {
+            if (_overlayImage == null) return;
+
+            _undoStack.Push(new Bitmap(_overlayImage));
+            _redoStack.Clear();   // redo invalid after new action
+        }
+
+        public void Undo()
+        {
+            if (_undoStack.Count == 0) return;
+
+            _redoStack.Push(new Bitmap(_overlayImage));
+            _overlayImage.Dispose();
+            _overlayImage = _undoStack.Pop();
+
+            RefreshComposite();
+        }
+
+        public void Redo()
+        {
+            if (_redoStack.Count == 0) return;
+
+            _undoStack.Push(new Bitmap(_overlayImage));
+            _overlayImage.Dispose();
+            _overlayImage = _redoStack.Pop();
+
+            RefreshComposite();
+        }
+
 
         private void RefreshComposite()
         {
