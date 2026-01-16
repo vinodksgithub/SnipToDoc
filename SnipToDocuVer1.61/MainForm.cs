@@ -141,9 +141,33 @@ namespace ScreenCaptureUtility
             };
             bottomPanel.Controls.Add(lblStatus);
 
+            ToolStrip toolStrip = new ToolStrip
+            {
+                Dock = DockStyle.Top,
+                GripStyle = ToolStripGripStyle.Hidden
+            };
+            Controls.Add(toolStrip);
+            toolStrip.BringToFront();
+
+
+            AddToolButton(toolStrip, "⬛ Rectangle", "Rectangle");
+            AddToolButton(toolStrip, "✏ Pen", "Pen");
+            AddToolButton(toolStrip, "📝 Annotation", "Annotation");
+            AddToolButton(toolStrip, "➖ Horizontal", "Horizontal");
+            AddToolButton(toolStrip, "➕ Vertical", "Vertical");
+
+            toolStrip.Items.Add(new ToolStripSeparator());
+
+            ToolStripButton resetBtn = new ToolStripButton("❌ Reset");
+            resetBtn.Click += (s, e) => _imageEditor.SetTool("");
+            toolStrip.Items.Add(resetBtn);
+
+
             _saveHandler = new SaveOptionsHandler(btnSaveToWord, chkAppend, lblStatus, bottomPanel);
             _saveHandler.AttachSaveCloseButton(btnSaveClose);
             _saveHandler.SetImageProvider(() => _imageEditor.GetEditedImage());
+
+
 
             // Create menu holder in form
             MenuStrip menu = MainMenuBuilder.BuildMenu(this);
@@ -213,5 +237,33 @@ namespace ScreenCaptureUtility
         {
             SaveLocationManager.PromptAndSetFolder();
         }
+
+            //helpder method for tool bar 
+        private ToolStripButton AddToolButton(
+    ToolStrip strip,
+    string text,
+    string toolName)
+        {
+            ToolStripButton btn = new ToolStripButton(text)
+            {
+                DisplayStyle = ToolStripItemDisplayStyle.Text,
+                CheckOnClick = true
+            };
+
+            btn.Click += (s, e) =>
+            {
+                // Uncheck others
+                foreach (ToolStripItem item in strip.Items)
+                    if (item is ToolStripButton b) b.Checked = false;
+
+                btn.Checked = true;
+                _imageEditor.SetTool(toolName);
+            };
+
+            strip.Items.Add(btn);
+            return btn;
+        }
+
+
     }
 }

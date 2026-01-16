@@ -120,6 +120,33 @@ namespace ScreenCaptureUtility
         }
         #endregion
 
+        //For tool bar 
+        public void SetTool(string toolName)
+        {
+            switch (toolName)
+            {
+                case "Rectangle":
+                    _mode = DrawMode.Rectangle;
+                    break;
+                case "Pen":
+                    _mode = DrawMode.Pen;
+                    break;
+                case "Annotation":
+                    _mode = DrawMode.Text;
+                    break;
+                case "Horizontal":
+                    _mode = DrawMode.HorizontalLine;
+                    break;
+                case "Vertical":
+                    _mode = DrawMode.VerticalLine;
+                    break;
+                default:
+                    _mode = DrawMode.None;
+                    break;
+            }
+        }
+
+
         #region Mouse Events
         private void PictureBox_MouseDown(object sender, MouseEventArgs e)
         {
