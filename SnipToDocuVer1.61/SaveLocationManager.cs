@@ -21,7 +21,7 @@ namespace ScreenCaptureUtility
 
             try
             {
-                // ✅ Auto-create if missing
+                // Auto-create if missing
                 if (!Directory.Exists(folder))
                 {
                     Directory.CreateDirectory(folder);
@@ -29,7 +29,7 @@ namespace ScreenCaptureUtility
             }
             catch
             {
-                // ✅ Fallback if path is invalid or cannot be created
+                // Fallback if path is invalid or cannot be created
                 folder = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
             }
 
@@ -63,7 +63,7 @@ namespace ScreenCaptureUtility
                 if (fbd.ShowDialog() == DialogResult.OK)
                 {
                     SetSaveFolder(fbd.SelectedPath);
-                    MessageBox.Show($"Save location set to:\n{fbd.SelectedPath}", "Location Updated");
+                    //MessageBox.Show($"Save location set to:\n{fbd.SelectedPath}", "Location Updated");
                 }
             }
         }

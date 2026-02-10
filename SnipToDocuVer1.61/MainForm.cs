@@ -26,12 +26,20 @@ namespace ScreenCaptureUtility
         private SaveOptionsHandler _saveHandler;
         private Bitmap _currentCapture;
 
+        // Delay (in seconds) before capture starts
+        private int captureDelaySeconds = 0; // default = 0s
+
+
         public ImageEditor ImageEditor => _imageEditor;
 
+        private void MainForm_Load(object sender, EventArgs e)
+        {
+            captureDelaySeconds = 0;
+        }
 
         public MainForm()
         {
-            Text = "QA Evidence Capturer v1.61";
+            Text = "QA Evidence Capturer v1.62";
             Size = new Size(1000, 800);
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(700, 450);
@@ -82,7 +90,7 @@ namespace ScreenCaptureUtility
 
             btnSaveToWord = new Button
             {
-                Text = "💾 Save",
+                Text = "💾 Save ",
                 Location = new Point(340, 15),
                 Size = new Size(150, 40),
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
@@ -179,46 +187,118 @@ namespace ScreenCaptureUtility
 
         private async void BtnCapture_Click(object sender, EventArgs e)
         {
-            lblStatus.Text = "Capturing full screen...";
-            WindowState = FormWindowState.Minimized;
-            await Task.Delay(500);
-
-            Rectangle bounds = GetPhysicalScreenBounds();
-            Bitmap bmp = new Bitmap(bounds.Width, bounds.Height);
-            using (Graphics g = Graphics.FromImage(bmp))
+            try
             {
-                g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size);
-            }
+                btnCapture.Enabled = false;
 
-            _currentCapture?.Dispose();
-            _currentCapture = bmp;
-            _imageEditor.SetImage(_currentCapture);
-            _saveHandler.NotifyImageAvailable(true);
-
-            //Clipboard.SetImage(_currentCapture);
-            lblStatus.Text = "Full screen captured.";
-            WindowState = FormWindowState.Normal;
-        }
-
-        private void BtnRegionCapture_Click(object sender, EventArgs e)
-        {
-            WindowState = FormWindowState.Minimized;
-            System.Threading.Thread.Sleep(300);
-
-            using (RegionCaptureForm f = new RegionCaptureForm())
-            {
-                if (f.ShowDialog() == DialogResult.OK)
+                // Apply DelayCapture (only if > 0)
+                if (captureDelaySeconds > 0)
                 {
-                    _currentCapture?.Dispose();
-                    _currentCapture = f.CapturedBitmap;
-                    _imageEditor.SetImage(_currentCapture);
-                    _saveHandler.NotifyImageAvailable(true);
-                    //Clipboard.SetImage(_currentCapture);
-                    lblStatus.Text = "Region captured.";
+                    lblStatus.Text = $"Capturing full screen in {captureDelaySeconds}s...";
+                    await Task.Delay(captureDelaySeconds * 1000);
+                }
+
+                lblStatus.Text = "Capturing full screen...";
+                WindowState = FormWindowState.Minimized;
+
+                // Allow UI to settle before capture
+                await Task.Delay(500);
+
+                Rectangle bounds = GetPhysicalScreenBounds();
+                Bitmap bmp = new Bitmap(bounds.Width, bounds.Height);
+
+                using (Graphics g = Graphics.FromImage(bmp))
+                {
+                    g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size);
+                }
+
+                _currentCapture?.Dispose();
+                _currentCapture = bmp;
+
+                _imageEditor.SetImage(_currentCapture);
+                _saveHandler.NotifyImageAvailable(true);
+
+                lblStatus.Text = "Full screen captured.";
+
+                // ✅ Toast notification (only for delayed capture)
+                if (captureDelaySeconds > 0)
+                {
+                    ShowToast(" Capture completed");
                 }
             }
-            WindowState = FormWindowState.Normal;
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    ex.Message,
+                    "Capture Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            finally
+            {
+                WindowState = FormWindowState.Normal;
+                btnCapture.Enabled = true;
+            }
         }
+
+
+
+        private async void BtnRegionCapture_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                btnRegionCapture.Enabled = false;
+
+                // Apply DelayCapture (only if > 0)
+                if (captureDelaySeconds > 0)
+                {
+                    lblStatus.Text = $"Region capture in {captureDelaySeconds}s...";
+                    await Task.Delay(captureDelaySeconds * 1000);
+                }
+
+                WindowState = FormWindowState.Minimized;
+
+                // Allow UI to settle
+                await Task.Delay(300);
+
+                using (RegionCaptureForm f = new RegionCaptureForm())
+                {
+                    if (f.ShowDialog() == DialogResult.OK)
+                    {
+                        _currentCapture?.Dispose();
+                        _currentCapture = f.CapturedBitmap;
+
+                        _imageEditor.SetImage(_currentCapture);
+                        _saveHandler.NotifyImageAvailable(true);
+
+                        lblStatus.Text = "Region captured.";
+
+                        // ✅ Toast notification (only for delayed capture)
+                        if (captureDelaySeconds > 0)
+                        {
+                            ShowToast("✅ Capture completed");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    ex.Message,
+                    "Region Capture Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            finally
+            {
+                WindowState = FormWindowState.Normal;
+                btnRegionCapture.Enabled = true;
+            }
+        }
+
+
 
         private Rectangle GetPhysicalScreenBounds()
         {
@@ -263,6 +343,65 @@ namespace ScreenCaptureUtility
             strip.Items.Add(btn);
             return btn;
         }
+
+
+        public void DelayMenu_Click(object sender, EventArgs e)
+        {
+            if (sender is not ToolStripMenuItem selectedItem)
+                return;
+
+            if (selectedItem.OwnerItem is not ToolStripMenuItem parentMenu)
+                return;
+
+            // Uncheck all sibling items
+            foreach (ToolStripMenuItem item in parentMenu.DropDownItems)
+            {
+                item.Checked = false;
+            }
+
+            selectedItem.Checked = true;
+
+            captureDelaySeconds = int.Parse(
+                selectedItem.Text.Replace("s", "")
+            );
+        }
+
+        private async void ShowToast(string message)
+        {
+            Label toast = new Label
+            {
+                Text = message,
+                AutoSize = true,
+                BackColor = Color.FromArgb(180, 0, 0, 0),   // semi-transparent black
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Padding = new Padding(15),
+                Visible = false
+            };
+
+            Controls.Add(toast);
+            toast.BringToFront();
+
+            // Bottom-right position
+            toast.Left = ClientSize.Width - toast.Width - 20;
+            toast.Top = ClientSize.Height - toast.Height - 20;
+
+            toast.Visible = true;
+
+            // Show for 1 second
+            await Task.Delay(1000);
+
+            // Fade out
+            for (int alpha = 180; alpha >= 0; alpha -= 30)
+            {
+                toast.BackColor = Color.FromArgb(alpha, 0, 0, 0);
+                await Task.Delay(50);
+            }
+
+            Controls.Remove(toast);
+            toast.Dispose();
+        }
+
 
 
     }

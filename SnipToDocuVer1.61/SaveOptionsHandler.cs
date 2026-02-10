@@ -59,7 +59,7 @@ namespace ScreenCaptureUtility
                     btnSave.Text = "➕ Append";
                     btnSaveClose.Visible = true;
 
-                    // 🔥 Hide format selection in Append mode
+                    // Hide format selection in Append mode
                     radioWord.Visible = false;
                     radioImage.Visible = false;
 
@@ -71,7 +71,7 @@ namespace ScreenCaptureUtility
                     btnSave.Text = "💾 Save";
                     btnSaveClose.Visible = false;
 
-                    // 🔁 Restore options
+                    // Restore options
                     radioWord.Visible = true;
                     radioImage.Visible = true;
                 }
