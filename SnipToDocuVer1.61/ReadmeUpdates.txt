@@ -16,8 +16,14 @@ Backlog
 
 - add ADO connectivity to upload evidence to test case
 
-- perform undo of image editor changes 
+- perform undo of image editor changes [ done ]
 
 - text annotation on captured content should be allowed to re align using mouse
 
 - add color palette 
+
+- add text post image is captured to word document 
+
+- add h1 , h2 , h3 word headings when text is entered while appending captured image to document
+
+- add OCR capability i.e print captured image to text - copy to clipboard 

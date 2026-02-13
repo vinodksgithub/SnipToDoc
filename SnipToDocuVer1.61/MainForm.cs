@@ -1,9 +1,8 @@
-﻿
-using System;
+﻿using System;
 using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using static System.Net.Mime.MediaTypeNames;
+using System.Diagnostics;
 using Label = System.Windows.Forms.Label;
 using Font = System.Drawing.Font;
 
@@ -18,7 +17,10 @@ namespace ScreenCaptureUtility
         private Button btnSaveClose;
         private CheckBox chkAppend;
         private CheckBox chkStayOnTop;
-        private Label lblStatus;
+
+        // Changed from Label → LinkLabel
+        private LinkLabel lblStatus;
+
         private Panel bottomPanel;
         private Button btnSetLocation;
 
@@ -28,7 +30,6 @@ namespace ScreenCaptureUtility
 
         // Delay (in seconds) before capture starts
         private int captureDelaySeconds = 0; // default = 0s
-
 
         public ImageEditor ImageEditor => _imageEditor;
 
@@ -129,7 +130,6 @@ namespace ScreenCaptureUtility
             chkStayOnTop.CheckedChanged += (s, e) => this.TopMost = chkStayOnTop.Checked;
             bottomPanel.Controls.Add(chkStayOnTop);
 
-
             btnSetLocation = new Button
             {
                 Text = "📂 Set Save Location",
@@ -140,14 +140,26 @@ namespace ScreenCaptureUtility
             btnSetLocation.Click += BtnSetLocation_Click;
             bottomPanel.Controls.Add(btnSetLocation);
 
-            lblStatus = new Label
+            // ===== Status (LinkLabel) =====
+            lblStatus = new LinkLabel
             {
-                Text = "Ready.",
+                Text = "Ready.  Click here to navigate evidence path",
                 Location = new Point(20, 100),
                 AutoSize = true,
-                ForeColor = Color.DarkBlue
+                LinkColor = Color.Blue,
+                ActiveLinkColor = Color.Red,
+                VisitedLinkColor = Color.Purple
             };
+
+            // Add link ONLY ONCE (important)
+            int linkStart = lblStatus.Text.IndexOf("Click");
+            lblStatus.Links.Add(linkStart,
+                "Click here to navigate evidence path".Length);
+
+            lblStatus.LinkClicked += LblStatus_LinkClicked;
+
             bottomPanel.Controls.Add(lblStatus);
+
 
             ToolStrip toolStrip = new ToolStrip
             {
@@ -156,7 +168,6 @@ namespace ScreenCaptureUtility
             };
             Controls.Add(toolStrip);
             toolStrip.BringToFront();
-
 
             AddToolButton(toolStrip, "⬛ Rectangle", "Rectangle");
             AddToolButton(toolStrip, "✏ Pen", "Pen");
@@ -170,20 +181,24 @@ namespace ScreenCaptureUtility
             resetBtn.Click += (s, e) => _imageEditor.SetTool("");
             toolStrip.Items.Add(resetBtn);
 
-
-            _saveHandler = new SaveOptionsHandler(btnSaveToWord, chkAppend, lblStatus, bottomPanel);
+            _saveHandler = new SaveOptionsHandler(btnSaveToWord, chkAppend, (Label)(object)lblStatus, bottomPanel);
             _saveHandler.AttachSaveCloseButton(btnSaveClose);
             _saveHandler.SetImageProvider(() => _imageEditor.GetEditedImage());
 
-
-
             // Create menu holder in form
             MenuStrip menu = MainMenuBuilder.BuildMenu(this);
+
+            // ===== Delay Menu =====
+            ToolStripMenuItem delayMenu = new ToolStripMenuItem("Delay");
+            delayMenu.DropDownItems.Add("0s", null, DelayMenu_Click);
+            delayMenu.DropDownItems.Add("1s", null, DelayMenu_Click);
+            delayMenu.DropDownItems.Add("3s", null, DelayMenu_Click);
+            delayMenu.DropDownItems.Add("5s", null, DelayMenu_Click);
+            menu.Items.Add(delayMenu);
+
             Controls.Add(menu);
             MainMenuStrip = menu;
         }
-
-
 
         private async void BtnCapture_Click(object sender, EventArgs e)
         {
@@ -191,7 +206,6 @@ namespace ScreenCaptureUtility
             {
                 btnCapture.Enabled = false;
 
-                // Apply DelayCapture (only if > 0)
                 if (captureDelaySeconds > 0)
                 {
                     lblStatus.Text = $"Capturing full screen in {captureDelaySeconds}s...";
@@ -201,7 +215,6 @@ namespace ScreenCaptureUtility
                 lblStatus.Text = "Capturing full screen...";
                 WindowState = FormWindowState.Minimized;
 
-                // Allow UI to settle before capture
                 await Task.Delay(500);
 
                 Rectangle bounds = GetPhysicalScreenBounds();
@@ -220,7 +233,6 @@ namespace ScreenCaptureUtility
 
                 lblStatus.Text = "Full screen captured.";
 
-                // ✅ Toast notification (only for delayed capture)
                 if (captureDelaySeconds > 0)
                 {
                     ShowToast(" Capture completed");
@@ -228,12 +240,7 @@ namespace ScreenCaptureUtility
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    ex.Message,
-                    "Capture Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                MessageBox.Show(ex.Message, "Capture Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -242,15 +249,12 @@ namespace ScreenCaptureUtility
             }
         }
 
-
-
         private async void BtnRegionCapture_Click(object sender, EventArgs e)
         {
             try
             {
                 btnRegionCapture.Enabled = false;
 
-                // Apply DelayCapture (only if > 0)
                 if (captureDelaySeconds > 0)
                 {
                     lblStatus.Text = $"Region capture in {captureDelaySeconds}s...";
@@ -258,8 +262,6 @@ namespace ScreenCaptureUtility
                 }
 
                 WindowState = FormWindowState.Minimized;
-
-                // Allow UI to settle
                 await Task.Delay(300);
 
                 using (RegionCaptureForm f = new RegionCaptureForm())
@@ -274,7 +276,6 @@ namespace ScreenCaptureUtility
 
                         lblStatus.Text = "Region captured.";
 
-                        // ✅ Toast notification (only for delayed capture)
                         if (captureDelaySeconds > 0)
                         {
                             ShowToast("✅ Capture completed");
@@ -284,12 +285,7 @@ namespace ScreenCaptureUtility
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    ex.Message,
-                    "Region Capture Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                MessageBox.Show(ex.Message, "Region Capture Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -297,8 +293,6 @@ namespace ScreenCaptureUtility
                 btnRegionCapture.Enabled = true;
             }
         }
-
-
 
         private Rectangle GetPhysicalScreenBounds()
         {
@@ -316,13 +310,58 @@ namespace ScreenCaptureUtility
         private void BtnSetLocation_Click(object sender, EventArgs e)
         {
             SaveLocationManager.PromptAndSetFolder();
+
+            string text = "Ready.  Click here to navigate evidence path";
+
+            lblStatus.SuspendLayout();
+
+            try
+            {
+                lblStatus.Text = text;
+
+                // Rebuild links safely
+                lblStatus.Links.Clear();
+
+                int linkStart = text.IndexOf("Click");
+                if (linkStart >= 0)
+                {
+                    lblStatus.Links.Add(
+                        linkStart,
+                        "Click here to navigate evidence path".Length);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Optional: log/debug instead of silent failure
+                System.Diagnostics.Debug.WriteLine(
+                    $"LinkLabel update failed: {ex.Message}");
+            }
+            finally
+            {
+                // ALWAYS resume layout
+                lblStatus.ResumeLayout();
+            }
         }
 
-            //helpder method for tool bar 
+
+
+
+        private void LblStatus_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        {
+            string folder = SaveLocationManager.GetSaveFolder();
+
+            if (System.IO.Directory.Exists(folder))
+            {
+                System.Diagnostics.Process.Start("explorer.exe", folder);
+            }
+        }
+
+
+        // Helper method for tool bar
         private ToolStripButton AddToolButton(
-    ToolStrip strip,
-    string text,
-    string toolName)
+            ToolStrip strip,
+            string text,
+            string toolName)
         {
             ToolStripButton btn = new ToolStripButton(text)
             {
@@ -332,7 +371,6 @@ namespace ScreenCaptureUtility
 
             btn.Click += (s, e) =>
             {
-                // Uncheck others
                 foreach (ToolStripItem item in strip.Items)
                     if (item is ToolStripButton b) b.Checked = false;
 
@@ -344,7 +382,7 @@ namespace ScreenCaptureUtility
             return btn;
         }
 
-
+        // ===== Delay Menu Handler =====
         public void DelayMenu_Click(object sender, EventArgs e)
         {
             if (sender is not ToolStripMenuItem selectedItem)
@@ -353,7 +391,6 @@ namespace ScreenCaptureUtility
             if (selectedItem.OwnerItem is not ToolStripMenuItem parentMenu)
                 return;
 
-            // Uncheck all sibling items
             foreach (ToolStripMenuItem item in parentMenu.DropDownItems)
             {
                 item.Checked = false;
@@ -372,7 +409,7 @@ namespace ScreenCaptureUtility
             {
                 Text = message,
                 AutoSize = true,
-                BackColor = Color.FromArgb(180, 0, 0, 0),   // semi-transparent black
+                BackColor = Color.FromArgb(180, 0, 0, 0),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
                 Padding = new Padding(15),
@@ -382,16 +419,13 @@ namespace ScreenCaptureUtility
             Controls.Add(toast);
             toast.BringToFront();
 
-            // Bottom-right position
             toast.Left = ClientSize.Width - toast.Width - 20;
             toast.Top = ClientSize.Height - toast.Height - 20;
 
             toast.Visible = true;
 
-            // Show for 1 second
             await Task.Delay(1000);
 
-            // Fade out
             for (int alpha = 180; alpha >= 0; alpha -= 30)
             {
                 toast.BackColor = Color.FromArgb(alpha, 0, 0, 0);
@@ -401,8 +435,5 @@ namespace ScreenCaptureUtility
             Controls.Remove(toast);
             toast.Dispose();
         }
-
-
-
     }
 }

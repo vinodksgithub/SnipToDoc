@@ -1,9 +1,7 @@
-﻿
-using System;
+﻿using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using System.Reflection.Emit;
 using System.Windows.Forms;
 using Marshal = System.Runtime.InteropServices.Marshal;
 using Word = Microsoft.Office.Interop.Word;
@@ -25,6 +23,10 @@ namespace ScreenCaptureUtility
         private Word.Document _activeDoc = null;
 
         private Func<Bitmap> _getEditedImage;
+
+        // ===== Word Addons flags =====
+        private static Func<bool> _insertTextProvider;
+        private static int _headingLevel = 0;
 
         public SaveOptionsHandler(Button saveButton, CheckBox appendCheckBox, Label statusLabel, Panel parentPanel)
         {
@@ -51,7 +53,6 @@ namespace ScreenCaptureUtility
 
             btnSave.Click += BtnSave_Click;
 
-
             chkAppend.CheckedChanged += (s, e) =>
             {
                 if (chkAppend.Checked)
@@ -76,9 +77,6 @@ namespace ScreenCaptureUtility
                     radioImage.Visible = true;
                 }
             };
-
-
-
         }
 
         public void AttachSaveCloseButton(Button saveCloseBtn)
@@ -86,7 +84,6 @@ namespace ScreenCaptureUtility
             btnSaveClose = saveCloseBtn;
             btnSaveClose.Click += BtnSaveClose_Click;
         }
-
 
         public void SetImageProvider(Func<Bitmap> imageProvider)
         {
@@ -167,6 +164,31 @@ namespace ScreenCaptureUtility
                 var shape = _activeDoc.InlineShapes.AddPicture(tempImg, Range: _activeDoc.Characters.Last);
                 shape.Width = 450;
 
+                // ===== Apply Heading if selected =====
+                if (_headingLevel > 0)
+                {
+                    range.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+                    string styleName = $"Heading {_headingLevel}";
+                    range.set_Style(styleName);
+
+                    string headingText = Prompt.ShowDialog($"Enter text for {styleName}", "Word Addons - Heading");
+                    if (!string.IsNullOrEmpty(headingText))
+                    {
+                        range.InsertAfter(headingText + "\n");
+                    }
+                }
+
+                // ===== Insert text if InsertText is active =====
+                if (_insertTextProvider != null && _insertTextProvider())
+                {
+                    string userText = Prompt.ShowDialog("Enter text to insert", "Word Addons - Insert Text");
+                    if (!string.IsNullOrEmpty(userText))
+                    {
+                        range.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+                        range.InsertAfter(userText + "\n");
+                    }
+                }
+
                 if (!chkAppend.Checked)
                 {
                     string uniqueFileName = $"Evidence_{DateTime.Now:yyyyMMdd_HHmmss_fff}.docx";
@@ -231,6 +253,17 @@ namespace ScreenCaptureUtility
                 }
             }
             catch { }
+        }
+
+        // ===== Static hooks for menu =====
+        public static void SetInsertTextProvider(Func<bool> provider)
+        {
+            _insertTextProvider = provider;
+        }
+
+        public static void SetHeadingLevel(int level)
+        {
+            _headingLevel = level;
         }
     }
 }

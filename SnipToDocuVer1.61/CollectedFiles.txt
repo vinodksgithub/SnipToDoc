@@ -1,0 +1,1505 @@
+App.config
+<configuration>
+	<appSettings>
+		<add key="SaveFolder" value="c:\temp" />
+	</appSettings>
+</configuration>
+*****************************************************************
+
+ImageEditor.cs
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Windows.Forms;
+using Label = System.Windows.Forms.Label;
+
+namespace ScreenCaptureUtility
+{
+    public class ImageEditor
+    {
+        private PictureBox _pictureBox;
+
+        private Bitmap _baseImage;
+        private Bitmap _overlayImage;
+
+        private bool _isDrawing;
+        private Point _startImgPoint;
+        private Point _lastImgPoint;
+        private Point _currentLineEnd;
+
+        private enum DrawMode
+        {
+            None,
+            Rectangle,
+            Pen,
+            Text,
+            HorizontalLine,
+            VerticalLine
+        }
+
+        private DrawMode _mode = DrawMode.None;
+
+        private Rectangle _currentImgRect;
+        private GraphicsPath _penPath;
+
+        private Stack<Bitmap> _undoStack = new Stack<Bitmap>();
+        private Stack<Bitmap> _redoStack = new Stack<Bitmap>();
+
+        private ContextMenuStrip _menu;
+
+        public ImageEditor(PictureBox pictureBox)
+        {
+            _pictureBox = pictureBox;
+            _pictureBox.MouseDown += PictureBox_MouseDown;
+            _pictureBox.MouseMove += PictureBox_MouseMove;
+            _pictureBox.MouseUp += PictureBox_MouseUp;
+            _pictureBox.Paint += PictureBox_Paint;
+
+            BuildContextMenu();
+        }
+
+        #region Context Menu
+        private void BuildContextMenu()
+        {
+            _menu = new ContextMenuStrip();
+
+            _menu.Items.Add("Rectangle", null, (s, e) => _mode = DrawMode.Rectangle);
+            _menu.Items.Add("Pen", null, (s, e) => _mode = DrawMode.Pen);
+            _menu.Items.Add("Annotation", null, (s, e) => _mode = DrawMode.Text);
+            _menu.Items.Add("Horizontal Line", null, (s, e) => _mode = DrawMode.HorizontalLine);
+            _menu.Items.Add("Vertical Line", null, (s, e) => _mode = DrawMode.VerticalLine);
+
+            _menu.Items.Add(new ToolStripSeparator());
+
+            _menu.Items.Add("Reset Tool", null, (s, e) =>
+            {
+                _mode = DrawMode.None;
+                _isDrawing = false;
+            });
+
+            _menu.Items.Add("Erase All", null, (s, e) => EraseAll());
+
+            _pictureBox.ContextMenuStrip = _menu;
+        }
+        #endregion
+
+        #region Public API (Used by Menu Bar)
+        public void Undo()
+        {
+            if (_undoStack.Count == 0) return;
+
+            _redoStack.Push(new Bitmap(_overlayImage));
+            _overlayImage.Dispose();
+            _overlayImage = _undoStack.Pop();
+
+            RefreshComposite();
+        }
+
+        public void Redo()
+        {
+            if (_redoStack.Count == 0) return;
+
+            _undoStack.Push(new Bitmap(_overlayImage));
+            _overlayImage.Dispose();
+            _overlayImage = _redoStack.Pop();
+
+            RefreshComposite();
+        }
+
+        public Bitmap GetEditedImage()
+        {
+            return new Bitmap(_pictureBox.Image);
+        }
+        #endregion
+
+        #region Image Setup
+        public void SetImage(Bitmap bmp)
+        {
+            _baseImage?.Dispose();
+            _overlayImage?.Dispose();
+
+            _baseImage = new Bitmap(bmp);
+            _overlayImage = new Bitmap(bmp.Width, bmp.Height);
+
+            _undoStack.Clear();
+            _redoStack.Clear();
+
+            RefreshComposite();
+        }
+        #endregion
+
+        //For tool bar 
+        public void SetTool(string toolName)
+        {
+            switch (toolName)
+            {
+                case "Rectangle":
+                    _mode = DrawMode.Rectangle;
+                    break;
+                case "Pen":
+                    _mode = DrawMode.Pen;
+                    break;
+                case "Annotation":
+                    _mode = DrawMode.Text;
+                    break;
+                case "Horizontal":
+                    _mode = DrawMode.HorizontalLine;
+                    break;
+                case "Vertical":
+                    _mode = DrawMode.VerticalLine;
+                    break;
+                default:
+                    _mode = DrawMode.None;
+                    break;
+            }
+        }
+
+
+        #region Mouse Events
+        private void PictureBox_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (_baseImage == null) return;
+
+            if (e.Button == MouseButtons.Right) return;
+
+            Point imgPoint = TranslateZoomMousePosition(e.Location);
+
+            if (_mode == DrawMode.Text)
+            {
+                string text = Prompt.ShowDialog("Enter annotation text", "Add Annotation");
+                if (!string.IsNullOrEmpty(text))
+                {
+                    SaveStateForUndo();
+
+                    using (Graphics g = Graphics.FromImage(_overlayImage))
+                    using (Font f = new Font("Segoe UI", 14, FontStyle.Bold))
+                    using (Brush b = new SolidBrush(Color.Red))
+                    {
+                        g.DrawString(text, f, b, imgPoint);
+                    }
+
+                    RefreshComposite();
+                }
+                return;
+            }
+
+            _isDrawing = true;
+            _startImgPoint = imgPoint;
+            _lastImgPoint = imgPoint;
+            _currentLineEnd = imgPoint;
+
+            if (_mode == DrawMode.Pen)
+            {
+                _penPath = new GraphicsPath();
+                _penPath.AddLine(imgPoint, imgPoint);
+            }
+        }
+
+        private void PictureBox_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (!_isDrawing) return;
+
+            Point current = TranslateZoomMousePosition(e.Location);
+
+            if (_mode == DrawMode.Pen)
+            {
+                _penPath.AddLine(_lastImgPoint, current);
+                _lastImgPoint = current;
+            }
+            else if (_mode == DrawMode.Rectangle)
+            {
+                _currentImgRect = GetRect(_startImgPoint, current);
+            }
+            else if (_mode == DrawMode.HorizontalLine)
+            {
+                _currentLineEnd = new Point(current.X, _startImgPoint.Y);
+            }
+            else if (_mode == DrawMode.VerticalLine)
+            {
+                _currentLineEnd = new Point(_startImgPoint.X, current.Y);
+            }
+
+            _pictureBox.Invalidate();
+        }
+
+        private void PictureBox_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (!_isDrawing) return;
+
+            SaveStateForUndo();
+
+            using (Graphics g = Graphics.FromImage(_overlayImage))
+            using (Pen pen = new Pen(Color.Red, 2))
+            {
+                if (_mode == DrawMode.Rectangle)
+                    g.DrawRectangle(pen, _currentImgRect);
+
+                else if (_mode == DrawMode.Pen && _penPath != null)
+                    g.DrawPath(pen, _penPath);
+
+                else if (_mode == DrawMode.HorizontalLine || _mode == DrawMode.VerticalLine)
+                    g.DrawLine(pen, _startImgPoint, _currentLineEnd);
+            }
+
+            _penPath?.Dispose();
+            _penPath = null;
+            _currentImgRect = Rectangle.Empty;
+            _isDrawing = false;
+
+            RefreshComposite();
+        }
+
+        private void PictureBox_Paint(object sender, PaintEventArgs e)
+        {
+            if (!_isDrawing) return;
+
+            using (Pen pen = new Pen(Color.Red, 2))
+            {
+                if (_mode == DrawMode.Rectangle && _currentImgRect.Width > 0)
+                    e.Graphics.DrawRectangle(pen, TranslateImageRectToControl(_currentImgRect));
+
+                else if (_mode == DrawMode.Pen && _penPath != null)
+                    e.Graphics.DrawPath(pen, TranslatePathToControl(_penPath));
+
+                else if (_mode == DrawMode.HorizontalLine || _mode == DrawMode.VerticalLine)
+                {
+                    Point start = TranslateImagePointToControl(_startImgPoint);
+                    Point end = TranslateImagePointToControl(_currentLineEnd);
+                    e.Graphics.DrawLine(pen, start, end);
+                }
+            }
+        }
+        #endregion
+
+        #region Undo Helpers
+        private void SaveStateForUndo()
+        {
+            _undoStack.Push(new Bitmap(_overlayImage));
+            _redoStack.Clear();
+        }
+
+        private void EraseAll()
+        {
+            SaveStateForUndo();
+            _overlayImage = new Bitmap(_baseImage.Width, _baseImage.Height);
+            RefreshComposite();
+        }
+        #endregion
+
+        #region Rendering
+        private void RefreshComposite()
+        {
+            Bitmap composite = new Bitmap(_baseImage.Width, _baseImage.Height);
+
+            using (Graphics g = Graphics.FromImage(composite))
+            {
+                g.DrawImage(_baseImage, 0, 0);
+                g.DrawImage(_overlayImage, 0, 0);
+            }
+
+            _pictureBox.Image?.Dispose();
+            _pictureBox.Image = composite;
+
+            Clipboard.SetImage(new Bitmap(composite));
+        }
+        #endregion
+
+        #region Coordinate Helpers
+        private Rectangle GetRect(Point p1, Point p2)
+        {
+            return new Rectangle(
+                Math.Min(p1.X, p2.X),
+                Math.Min(p1.Y, p2.Y),
+                Math.Abs(p1.X - p2.X),
+                Math.Abs(p1.Y - p2.Y));
+        }
+
+        private Point TranslateImagePointToControl(Point p)
+        {
+            Rectangle r = TranslateImageRectToControl(new Rectangle(p, new Size(1, 1)));
+            return r.Location;
+        }
+
+        private Point TranslateZoomMousePosition(Point p)
+        {
+            float imageAspect = (float)_baseImage.Width / _baseImage.Height;
+            float boxAspect = (float)_pictureBox.Width / _pictureBox.Height;
+
+            int drawWidth, drawHeight, offsetX = 0, offsetY = 0;
+
+            if (imageAspect > boxAspect)
+            {
+                drawWidth = _pictureBox.Width;
+                drawHeight = (int)(_pictureBox.Width / imageAspect);
+                offsetY = (_pictureBox.Height - drawHeight) / 2;
+            }
+            else
+            {
+                drawHeight = _pictureBox.Height;
+                drawWidth = (int)(_pictureBox.Height * imageAspect);
+                offsetX = (_pictureBox.Width - drawWidth) / 2;
+            }
+
+            float scaleX = (float)_baseImage.Width / drawWidth;
+            float scaleY = (float)_baseImage.Height / drawHeight;
+
+            return new Point(
+                (int)((p.X - offsetX) * scaleX),
+                (int)((p.Y - offsetY) * scaleY));
+        }
+
+        private Rectangle TranslateImageRectToControl(Rectangle r)
+        {
+            float imageAspect = (float)_baseImage.Width / _baseImage.Height;
+            float boxAspect = (float)_pictureBox.Width / _pictureBox.Height;
+
+            int drawWidth, drawHeight, offsetX = 0, offsetY = 0;
+
+            if (imageAspect > boxAspect)
+            {
+                drawWidth = _pictureBox.Width;
+                drawHeight = (int)(_pictureBox.Width / imageAspect);
+                offsetY = (_pictureBox.Height - drawHeight) / 2;
+            }
+            else
+            {
+                drawHeight = _pictureBox.Height;
+                drawWidth = (int)(_pictureBox.Height * imageAspect);
+                offsetX = (_pictureBox.Width - drawWidth) / 2;
+            }
+
+            float scaleX = (float)drawWidth / _baseImage.Width;
+            float scaleY = (float)drawHeight / _baseImage.Height;
+
+            return new Rectangle(
+                (int)(r.X * scaleX + offsetX),
+                (int)(r.Y * scaleY + offsetY),
+                (int)(r.Width * scaleX),
+                (int)(r.Height * scaleY));
+        }
+
+        private GraphicsPath TranslatePathToControl(GraphicsPath imgPath)
+        {
+            GraphicsPath controlPath = new GraphicsPath();
+            PointF[] pts = imgPath.PathPoints;
+
+            for (int i = 1; i < pts.Length; i++)
+            {
+                controlPath.AddLine(
+                    TranslateImagePointToControl(Point.Round(pts[i - 1])),
+                    TranslateImagePointToControl(Point.Round(pts[i])));
+            }
+            return controlPath;
+        }
+        #endregion
+    }
+
+    #region Prompt Dialog
+    public static class Prompt
+    {
+        public static string ShowDialog(string text, string caption)
+        {
+            Form prompt = new Form()
+            {
+                Width = 500,
+                Height = 300,
+                Text = caption,
+                StartPosition = FormStartPosition.CenterParent
+            };
+
+            Label lbl = new Label()
+            {
+                Left = 20,
+                Top = 20,
+                Text = text,
+                Width = 440
+            };
+
+            TextBox box = new TextBox()
+            {
+                Left = 20,
+                Top = 50,
+                Width = 440,
+                Height = 150,
+                Multiline = true,
+                ScrollBars = ScrollBars.Vertical
+            };
+
+            Button ok = new Button()
+            {
+                Text = "OK",
+                Left = 380,
+                Width = 80,
+                Top = 220,
+                DialogResult = DialogResult.OK
+            };
+
+            prompt.Controls.Add(lbl);
+            prompt.Controls.Add(box);
+            prompt.Controls.Add(ok);
+            prompt.AcceptButton = ok;
+
+            return prompt.ShowDialog() == DialogResult.OK ? box.Text : "";
+        }
+    }
+    #endregion
+}
+
+*****************************************************************
+
+MainForm.cs
+using System;
+using System.Drawing;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using Label = System.Windows.Forms.Label;
+using Font = System.Drawing.Font;
+
+namespace ScreenCaptureUtility
+{
+    public partial class MainForm : Form
+    {
+        private PictureBox pictureBoxPreview;
+        private Button btnCapture;
+        private Button btnRegionCapture;
+        private Button btnSaveToWord;
+        private Button btnSaveClose;
+        private CheckBox chkAppend;
+        private CheckBox chkStayOnTop;
+        private Label lblStatus;
+        private Label lblSavePath;   // persistent save path label
+        private Panel bottomPanel;
+        private Button btnSetLocation;
+        private Button btnOpenFolder; // open folder button
+
+        private ImageEditor _imageEditor;
+        private SaveOptionsHandler _saveHandler;
+        private Bitmap _currentCapture;
+
+        // Delay (in seconds) before capture starts
+        private int captureDelaySeconds = 0; // default = 0s
+
+        public ImageEditor ImageEditor => _imageEditor;
+
+        private void MainForm_Load(object sender, EventArgs e)
+        {
+            captureDelaySeconds = 0;
+
+            // Refresh save path label on startup
+            string folder = SaveLocationManager.GetSaveFolder();
+            if (!string.IsNullOrEmpty(folder))
+            {
+                lblSavePath.Text = $"Save Location: {folder}";
+            }
+        }
+
+        public MainForm()
+        {
+            Text = "QA Evidence Capturer v1.62";
+            Size = new Size(1000, 800);
+            StartPosition = FormStartPosition.CenterScreen;
+            MinimumSize = new Size(700, 450);
+
+            // Ensure load handler is attached
+            Load += MainForm_Load;
+
+            InitializeUnifiedUI();
+        }
+
+        private void InitializeUnifiedUI()
+        {
+            // ===== Bottom Panel =====
+            bottomPanel = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 135,
+                BackColor = Color.FromArgb(230, 230, 230),
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            Controls.Add(bottomPanel);
+
+            // Main layout (3 rows)
+            TableLayoutPanel layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Padding = new Padding(10),
+                AutoSize = false
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            bottomPanel.Controls.Add(layout);
+
+            //
+            // ===== Row 1 : Capture buttons =====
+            //
+            FlowLayoutPanel capturePanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                WrapContents = false,
+                FlowDirection = FlowDirection.LeftToRight
+            };
+
+            btnCapture = new Button
+            {
+                Text = "📸 Capture",
+                Size = new Size(120, 40),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold)
+            };
+            btnCapture.Click += BtnCapture_Click;
+
+            btnRegionCapture = new Button
+            {
+                Text = "📐 Region",
+                Size = new Size(120, 40),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold)
+            };
+            btnRegionCapture.Click += BtnRegionCapture_Click;
+
+            capturePanel.Controls.Add(btnCapture);
+            capturePanel.Controls.Add(btnRegionCapture);
+
+            layout.Controls.Add(capturePanel, 0, 0);
+
+            //
+            // ===== Row 2 : Save row =====
+            //
+            FlowLayoutPanel savePanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                WrapContents = false,
+                FlowDirection = FlowDirection.LeftToRight
+            };
+
+            btnSaveToWord = new Button
+            {
+                Text = "💾 Save",
+                Size = new Size(120, 40),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Enabled = false
+            };
+            savePanel.Controls.Add(btnSaveToWord);
+
+            btnOpenFolder = new Button
+            {
+                Text = "📂 Open",
+                Size = new Size(120, 40),
+                Font = new Font("Segoe UI", 9)
+            };
+            btnOpenFolder.Click += BtnOpenFolder_Click;
+            savePanel.Controls.Add(btnOpenFolder);
+
+            btnSetLocation = new Button
+            {
+                Text = "📂 Set Save Location",
+                Size = new Size(180, 40),
+                Font = new Font("Segoe UI", 9)
+            };
+            btnSetLocation.Click += BtnSetLocation_Click;
+            savePanel.Controls.Add(btnSetLocation);
+
+            chkAppend = new CheckBox
+            {
+                Text = "Append Mode (Keep Word Open)",
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9),
+                Padding = new Padding(10, 10, 0, 0)
+            };
+            savePanel.Controls.Add(chkAppend);
+
+            btnSaveClose = new Button
+            {
+                Text = "💾 Save & Close",
+                Size = new Size(150, 40),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Visible = true
+            };
+            savePanel.Controls.Add(btnSaveClose);
+
+            layout.Controls.Add(savePanel, 0, 1);
+
+            //
+            // ===== Row 3 : Status row =====
+            //
+            FlowLayoutPanel statusPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                WrapContents = false,
+                FlowDirection = FlowDirection.LeftToRight
+            };
+
+            lblStatus = new Label
+            {
+                Text = "Ready.",
+                AutoSize = true,
+                ForeColor = Color.DarkBlue,
+                Padding = new Padding(0, 6, 20, 0)
+            };
+
+            lblSavePath = new Label
+            {
+                Text = $"Save Location: {SaveLocationManager.GetSaveFolder()}",
+                AutoSize = true,
+                ForeColor = Color.DarkGreen,
+                Padding = new Padding(0, 6, 0, 0)
+            };
+
+            statusPanel.Controls.Add(lblStatus);
+            statusPanel.Controls.Add(lblSavePath);
+
+            layout.Controls.Add(statusPanel, 0, 2);
+
+            // ===== Picture preview =====
+            pictureBoxPreview = new PictureBox
+            {
+                Dock = DockStyle.Fill,
+                BorderStyle = BorderStyle.Fixed3D,
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.Gray
+            };
+            Controls.Add(pictureBoxPreview);
+
+            _imageEditor = new ImageEditor(pictureBoxPreview);
+
+            // ===== Toolstrip =====
+            ToolStrip toolStrip = new ToolStrip
+            {
+                Dock = DockStyle.Top,
+                GripStyle = ToolStripGripStyle.Hidden
+            };
+            Controls.Add(toolStrip);
+            toolStrip.BringToFront();
+
+            AddToolButton(toolStrip, "⬛ Rectangle", "Rectangle");
+            AddToolButton(toolStrip, "✏ Pen", "Pen");
+            AddToolButton(toolStrip, "📝 Annotation", "Annotation");
+            AddToolButton(toolStrip, "➖ Horizontal", "Horizontal");
+            AddToolButton(toolStrip, "➕ Vertical", "Vertical");
+
+            toolStrip.Items.Add(new ToolStripSeparator());
+
+            ToolStripButton resetBtn = new ToolStripButton("❌ Reset");
+            resetBtn.Click += (s, e) => _imageEditor.SetTool("");
+            toolStrip.Items.Add(resetBtn);
+
+            // ===== Save handler =====
+            _saveHandler = new SaveOptionsHandler(btnSaveToWord, chkAppend, lblStatus, bottomPanel);
+            _saveHandler.AttachSaveCloseButton(btnSaveClose);
+            _saveHandler.SetImageProvider(() => _imageEditor.GetEditedImage());
+
+            // ===== Menu =====
+            MenuStrip menu = MainMenuBuilder.BuildMenu(this);
+            ToolStripMenuItem delayMenu = new ToolStripMenuItem("Delay");
+            delayMenu.DropDownItems.Add("0s", null, DelayMenu_Click);
+            delayMenu.DropDownItems.Add("1s", null, DelayMenu_Click);
+            delayMenu.DropDownItems.Add("3s", null, DelayMenu_Click);
+            delayMenu.DropDownItems.Add("5s", null, DelayMenu_Click);
+            menu.Items.Add(delayMenu);
+
+            Controls.Add(menu);
+            MainMenuStrip = menu;
+        }
+
+        private void BtnSetLocation_Click(object sender, EventArgs e)
+        {
+            string selectedPath = SaveLocationManager.PromptAndSetFolder();
+            if (!string.IsNullOrEmpty(selectedPath))
+            {
+                lblSavePath.Text = $"Save Location: {selectedPath}";
+            }
+            else
+            {
+                lblSavePath.Text = "Save location not set.";
+            }
+        }
+
+        private void BtnOpenFolder_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                string folderPath = SaveLocationManager.GetSaveFolder();
+                if (!string.IsNullOrEmpty(folderPath))
+                {
+                    if (!System.IO.Directory.Exists(folderPath))
+                    {
+                        System.IO.Directory.CreateDirectory(folderPath);
+                    }
+                    System.Diagnostics.Process.Start("explorer.exe", folderPath);
+                }
+                else
+                {
+                    MessageBox.Show("Save location is not set.",
+                                    "Open Folder",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error opening folder: {ex.Message}",
+                                "Open Folder Error",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error);
+            }
+        }
+
+        // Helper method for tool bar
+        private ToolStripButton AddToolButton(
+            ToolStrip strip,
+            string text,
+            string toolName)
+        {
+            ToolStripButton btn = new ToolStripButton(text)
+            {
+                DisplayStyle = ToolStripItemDisplayStyle.Text,
+                CheckOnClick = true
+            };
+
+            btn.Click += (s, e) =>
+            {
+                // Uncheck others
+                foreach (ToolStripItem item in strip.Items)
+                    if (item is ToolStripButton b) b.Checked = false;
+
+                btn.Checked = true;
+                _imageEditor.SetTool(toolName);
+            };
+
+            strip.Items.Add(btn);
+            return btn;
+        }
+
+        private async void BtnCapture_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                btnCapture.Enabled = false;
+
+                if (captureDelaySeconds > 0)
+                {
+                    lblStatus.Text = $"Capturing full screen in {captureDelaySeconds}s...";
+                    await Task.Delay(captureDelaySeconds * 1000);
+                }
+
+                lblStatus.Text = "Capturing full screen...";
+                WindowState = FormWindowState.Minimized;
+
+                await Task.Delay(500);
+
+                Rectangle bounds = GetPhysicalScreenBounds();
+                Bitmap bmp = new Bitmap(bounds.Width, bounds.Height);
+
+                using (Graphics g = Graphics.FromImage(bmp))
+                {
+                    g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size);
+                }
+
+                _currentCapture?.Dispose();
+                _currentCapture = bmp;
+
+                _imageEditor.SetImage(_currentCapture);
+                _saveHandler.NotifyImageAvailable(true);
+
+                lblStatus.Text = "Full screen captured.";
+
+                if (captureDelaySeconds > 0)
+                {
+                    ShowToast("📸 Capture completed");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Capture Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                WindowState = FormWindowState.Normal;
+                btnCapture.Enabled = true;
+            }
+        }
+
+        private async void BtnRegionCapture_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                btnRegionCapture.Enabled = false;
+
+                if (captureDelaySeconds > 0)
+                {
+                    lblStatus.Text = $"Region capture in {captureDelaySeconds}s...";
+                    await Task.Delay(captureDelaySeconds * 1000);
+                }
+
+                WindowState = FormWindowState.Minimized;
+                await Task.Delay(300);
+
+                using (RegionCaptureForm f = new RegionCaptureForm())
+                {
+                    if (f.ShowDialog() == DialogResult.OK)
+                    {
+                        _currentCapture?.Dispose();
+                        _currentCapture = f.CapturedBitmap;
+
+                        _imageEditor.SetImage(_currentCapture);
+                        _saveHandler.NotifyImageAvailable(true);
+
+                        lblStatus.Text = "Region captured.";
+
+                        if (captureDelaySeconds > 0)
+                        {
+                            ShowToast("✅ Capture completed");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Region Capture Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                WindowState = FormWindowState.Normal;
+                btnRegionCapture.Enabled = true;
+            }
+        }
+
+        private Rectangle GetPhysicalScreenBounds()
+        {
+            int left = int.MaxValue, top = int.MaxValue, right = int.MinValue, bottom = int.MinValue;
+            foreach (Screen s in Screen.AllScreens)
+            {
+                left = Math.Min(left, s.Bounds.Left);
+                top = Math.Min(top, s.Bounds.Top);
+                right = Math.Max(right, s.Bounds.Right);
+                bottom = Math.Max(bottom, s.Bounds.Bottom);
+            }
+            return Rectangle.FromLTRB(left, top, right, bottom);
+        }
+
+        // ===== Delay Menu Handler =====
+        public void DelayMenu_Click(object sender, EventArgs e)
+        {
+            if (sender is not ToolStripMenuItem selectedItem)
+                return;
+
+            if (selectedItem.OwnerItem is not ToolStripMenuItem parentMenu)
+                return;
+
+            // Uncheck all sibling items
+            foreach (ToolStripMenuItem item in parentMenu.DropDownItems)
+            {
+                item.Checked = false;
+            }
+
+            selectedItem.Checked = true;
+
+            captureDelaySeconds = int.Parse(
+                selectedItem.Text.Replace("s", "")
+            );
+        }
+
+        private async void ShowToast(string message)
+        {
+            Label toast = new Label
+            {
+                Text = message,
+                AutoSize = true,
+                BackColor = Color.FromArgb(180, 0, 0, 0),   // semi-transparent black
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Padding = new Padding(15),
+                Visible = false
+            };
+
+            Controls.Add(toast);
+            toast.BringToFront();
+
+            // Bottom-right position
+            toast.Left = ClientSize.Width - toast.Width - 20;
+            toast.Top = ClientSize.Height - toast.Height - 20;
+
+            toast.Visible = true;
+
+            // Show for 1 second
+            await Task.Delay(1000);
+
+            // Fade out
+            for (int alpha = 180; alpha >= 0; alpha -= 30)
+            {
+                toast.BackColor = Color.FromArgb(alpha, 0, 0, 0);
+                await Task.Delay(50);
+            }
+
+            Controls.Remove(toast);
+            toast.Dispose();
+        }
+    }
+}
+
+*****************************************************************
+
+MainMenuBuilder.cs
+using System;
+using System.Windows.Forms;
+
+namespace ScreenCaptureUtility
+{
+    public static class MainMenuBuilder
+    {
+        public static MenuStrip BuildMenu(MainForm form)
+        {
+            MenuStrip menuStrip = new MenuStrip();
+
+            // ===== Edit Menu =====
+            ToolStripMenuItem editMenu = new ToolStripMenuItem("Edit");
+
+            ToolStripMenuItem undoItem = new ToolStripMenuItem("Undo");
+            undoItem.ShortcutKeys = Keys.Control | Keys.Z;
+            undoItem.Click += (s, e) => form.ImageEditor?.Undo();
+
+            ToolStripMenuItem redoItem = new ToolStripMenuItem("Redo");
+            redoItem.ShortcutKeys = Keys.Control | Keys.Y;
+            redoItem.Click += (s, e) => form.ImageEditor?.Redo();
+
+            editMenu.DropDownItems.Add(undoItem);
+            editMenu.DropDownItems.Add(redoItem);
+
+            // ===== Connect Menu =====
+            ToolStripMenuItem connectMenu = new ToolStripMenuItem("Connect");
+
+            ToolStripMenuItem connectAdoItem = new ToolStripMenuItem("Connect ADO");
+            connectAdoItem.Click += (s, e) => OnConnectAdo(form);
+            connectMenu.DropDownItems.Add(connectAdoItem);
+
+            ToolStripMenuItem uploadEvidenceItem = new ToolStripMenuItem("Upload Evidence To Test");
+            uploadEvidenceItem.Click += (s, e) => OnUploadEvidence(form);
+            connectMenu.DropDownItems.Add(uploadEvidenceItem);
+
+            // ===== Word Addons Menu =====
+            ToolStripMenuItem wordAddonsMenu = new ToolStripMenuItem("Word Addons");
+
+            ToolStripMenuItem insertTextItem = new ToolStripMenuItem("Insert text")
+            {
+                CheckOnClick = true // toggle on/off
+            };
+            wordAddonsMenu.DropDownItems.Add(insertTextItem);
+
+            wordAddonsMenu.DropDownItems.Add("Heading 1", null, (s, e) => SaveOptionsHandler.SetHeadingLevel(1));
+            wordAddonsMenu.DropDownItems.Add("Heading 2", null, (s, e) => SaveOptionsHandler.SetHeadingLevel(2));
+            wordAddonsMenu.DropDownItems.Add("Heading 3", null, (s, e) => SaveOptionsHandler.SetHeadingLevel(3));
+
+            // Attach InsertText toggle to SaveOptionsHandler
+            SaveOptionsHandler.SetInsertTextProvider(() => insertTextItem.Checked);
+
+            // ===== Add Menus to Strip =====
+            menuStrip.Items.Add(editMenu);
+            menuStrip.Items.Add(connectMenu);
+            menuStrip.Items.Add(wordAddonsMenu);
+
+            return menuStrip;
+        }
+
+        // Placeholder methods for Connect actions
+        private static void OnConnectAdo(MainForm form)
+        {
+            MessageBox.Show("Connect ADO clicked.");
+        }
+
+        private static void OnUploadEvidence(MainForm form)
+        {
+            MessageBox.Show("Upload Evidence clicked.");
+        }
+    }
+}
+*****************************************************************
+
+MainPrograme.cs
+using System;
+using System.Windows.Forms;
+using App = System.Windows.Forms.Application;
+
+
+/*
+ * MainProgram.cs
+ * ----------------
+ * Entry point for the ScreenCaptureUtility application.
+ *
+ * Responsibilities:
+ *  - Defines the Main method as the starting point of the program.
+ *  - Configures application-wide settings before launching the main form.
+ */
+namespace ScreenCaptureUtility
+{
+    static class MainProgram
+    {
+        [STAThread]
+        static void Main()
+        {
+            App.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+            App.EnableVisualStyles();
+            App.SetCompatibleTextRenderingDefault(false);
+            App.Run(new MainForm());
+        }
+    }
+}
+
+*****************************************************************
+
+RegionCaptureForm.cs
+using System;
+using System.Drawing;
+using System.Windows.Forms;
+
+namespace ScreenCaptureUtility
+{
+    public class RegionCaptureForm : Form
+    {
+        private Point _startPoint;
+        private Point _endPoint;
+        private Rectangle _selection;
+        private bool _isSelecting = false;
+
+        public Bitmap CapturedBitmap { get; private set; }
+
+        public RegionCaptureForm()
+        {
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.WindowState = FormWindowState.Maximized;
+            this.BackColor = Color.Black;
+            this.Opacity = 0.25;
+            this.TopMost = true;
+            this.Cursor = Cursors.Cross;
+            this.DoubleBuffered = true;
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            _isSelecting = true;
+            _startPoint = e.Location;
+            _endPoint = e.Location;
+            Invalidate();
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            if (_isSelecting)
+            {
+                _endPoint = e.Location;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            _isSelecting = false;
+
+            _selection = GetRectangle(_startPoint, _endPoint);
+
+            if (_selection.Width > 0 && _selection.Height > 0)
+            {
+                CapturedBitmap = new Bitmap(_selection.Width, _selection.Height);
+                using (Graphics g = Graphics.FromImage(CapturedBitmap))
+                {
+                    g.CopyFromScreen(_selection.Location, Point.Empty, _selection.Size);
+                }
+            }
+
+            this.DialogResult = DialogResult.OK;
+            this.Close();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            if (_isSelecting)
+            {
+                Rectangle rect = GetRectangle(_startPoint, _endPoint);
+                using (Pen pen = new Pen(Color.Red, 6))
+                {
+                    e.Graphics.DrawRectangle(pen, rect);
+                }
+            }
+        }
+
+        private Rectangle GetRectangle(Point p1, Point p2)
+        {
+            return new Rectangle(
+                Math.Min(p1.X, p2.X),
+                Math.Min(p1.Y, p2.Y),
+                Math.Abs(p1.X - p2.X),
+                Math.Abs(p1.Y - p2.Y));
+        }
+    }
+}
+
+*****************************************************************
+
+SaveLocationManager.cs
+using System;
+using System.IO;
+using System.Configuration;
+using System.Windows.Forms;
+
+namespace ScreenCaptureUtility
+{
+    public static class SaveLocationManager
+    {
+        /// <summary>
+        /// Prompts the user to select a folder, saves it to App.config,
+        /// auto-creates the folder if missing, and returns the path.
+        /// </summary>
+        public static string PromptAndSetFolder()
+        {
+            using (FolderBrowserDialog dialog = new FolderBrowserDialog())
+            {
+                dialog.Description = "Select a folder to save evidence files";
+                dialog.ShowNewFolderButton = true;
+
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    string folder = dialog.SelectedPath;
+
+                    try
+                    {
+                        // Auto-create folder if it doesn’t exist
+                        if (!Directory.Exists(folder))
+                        {
+                            Directory.CreateDirectory(folder);
+                        }
+
+                        // Save to App.config
+                        Configuration config = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.None);
+                        if (config.AppSettings.Settings["SaveFolder"] == null)
+                        {
+                            config.AppSettings.Settings.Add("SaveFolder", folder);
+                        }
+                        else
+                        {
+                            config.AppSettings.Settings["SaveFolder"].Value = folder;
+                        }
+                        config.Save(ConfigurationSaveMode.Modified);
+                        ConfigurationManager.RefreshSection("appSettings");
+
+                        return folder;
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Error setting save location: {ex.Message}",
+                                        "Save Location Error",
+                                        MessageBoxButtons.OK,
+                                        MessageBoxIcon.Error);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Gets the currently saved folder path from App.config.
+        /// Ensures the folder exists (creates if missing).
+        /// </summary>
+        public static string GetCurrentFolder()
+        {
+            string folder = ConfigurationManager.AppSettings["SaveFolder"];
+
+            if (!string.IsNullOrEmpty(folder))
+            {
+                if (!Directory.Exists(folder))
+                {
+                    Directory.CreateDirectory(folder);
+                }
+            }
+
+            return folder;
+        }
+
+        /// <summary>
+        /// Alias for GetCurrentFolder() to match usage in MainForm.
+        /// </summary>
+        public static string GetSaveFolder()
+        {
+            return GetCurrentFolder();
+        }
+    }
+}
+*****************************************************************
+
+SaveOptionsHandler.cs
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Windows.Forms;
+using Marshal = System.Runtime.InteropServices.Marshal;
+using Word = Microsoft.Office.Interop.Word;
+using Label = System.Windows.Forms.Label;
+
+namespace ScreenCaptureUtility
+{
+    public class SaveOptionsHandler
+    {
+        private RadioButton radioWord;
+        private RadioButton radioImage;
+        private Button btnSave;
+        private Button btnSaveClose;
+        private CheckBox chkAppend;
+        private Label lblStatus;
+        string folder = SaveLocationManager.GetSaveFolder();
+
+        private Word.Application _wordApp = null;
+        private Word.Document _activeDoc = null;
+
+        private Func<Bitmap> _getEditedImage;
+
+        // ===== Word Addons flags =====
+        private static Func<bool> _insertTextProvider;
+        private static int _headingLevel = 0;
+
+        public SaveOptionsHandler(Button saveButton, CheckBox appendCheckBox, Label statusLabel, Panel parentPanel)
+        {
+            btnSave = saveButton;
+            chkAppend = appendCheckBox;
+            lblStatus = statusLabel;
+
+            radioWord = new RadioButton
+            {
+                Text = "Word",
+                Location = new Point(saveButton.Left, saveButton.Bottom + 10),
+                AutoSize = true,
+                Checked = true
+            };
+            parentPanel.Controls.Add(radioWord);
+
+            radioImage = new RadioButton
+            {
+                Text = "Image",
+                Location = new Point(radioWord.Right + 20, saveButton.Bottom + 10),
+                AutoSize = true
+            };
+            parentPanel.Controls.Add(radioImage);
+
+            btnSave.Click += BtnSave_Click;
+
+            chkAppend.CheckedChanged += (s, e) =>
+            {
+                if (chkAppend.Checked)
+                {
+                    btnSave.Text = "➕ Append";
+                    btnSaveClose.Visible = true;
+
+                    // Hide format selection in Append mode
+                    radioWord.Visible = false;
+                    radioImage.Visible = false;
+
+                    // Always Word in append
+                    radioWord.Checked = true;
+                }
+                else
+                {
+                    btnSave.Text = "💾 Save";
+                    btnSaveClose.Visible = false;
+
+                    // Restore options
+                    radioWord.Visible = true;
+                    radioImage.Visible = true;
+                }
+            };
+        }
+
+        public void AttachSaveCloseButton(Button saveCloseBtn)
+        {
+            btnSaveClose = saveCloseBtn;
+            btnSaveClose.Click += BtnSaveClose_Click;
+        }
+
+        public void SetImageProvider(Func<Bitmap> imageProvider)
+        {
+            _getEditedImage = imageProvider;
+            btnSave.Enabled = false;
+        }
+
+        public void NotifyImageAvailable(bool available)
+        {
+            btnSave.Enabled = available;
+        }
+
+        private void BtnSave_Click(object sender, EventArgs e)
+        {
+            if (_getEditedImage == null) return;
+            Bitmap currentCapture = _getEditedImage();
+            if (currentCapture == null) return;
+
+            if (chkAppend.Checked || radioWord.Checked)
+                SaveToWord(currentCapture);
+            else
+                SaveToImage(currentCapture);
+        }
+
+        private void BtnSaveClose_Click(object sender, EventArgs e)
+        {
+            if (_activeDoc == null || _wordApp == null)
+            {
+                MessageBox.Show("No open Word document found.");
+                return;
+            }
+
+            try
+            {
+                string folder = SaveLocationManager.GetSaveFolder();
+                string fileName = $"Evidence_{DateTime.Now:yyyyMMdd_HHmmss_fff}.docx";
+                string fullPath = Path.Combine(folder, fileName);
+
+                _activeDoc.SaveAs2(fullPath);
+                Clipboard.SetText(fullPath);
+                lblStatus.Text = $"Saved & copied path: {fileName}";
+
+                _activeDoc.Close(false);
+                _wordApp.Quit();
+
+                Marshal.ReleaseComObject(_activeDoc);
+                Marshal.ReleaseComObject(_wordApp);
+
+                _activeDoc = null;
+                _wordApp = null;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Save & Close failed: " + ex.Message);
+            }
+        }
+
+        private void SaveToWord(Bitmap capture)
+        {
+            string tempImg = Path.Combine(Path.GetTempPath(), "evidence.png");
+            capture.Save(tempImg, ImageFormat.Png);
+
+            try
+            {
+                if (_wordApp == null)
+                    _wordApp = new Word.Application { Visible = true };
+
+                if (_activeDoc == null)
+                {
+                    _activeDoc = _wordApp.Documents.Add();
+                    _activeDoc.Content.InsertAfter("Test Execution Evidence Report\n");
+                    _activeDoc.Content.InsertAfter($"Generated: {DateTime.Now}\n\n");
+                }
+
+                var range = _activeDoc.Content;
+                range.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+                range.InsertAfter($"\nCaptured: {DateTime.Now}\n");
+                var shape = _activeDoc.InlineShapes.AddPicture(tempImg, Range: _activeDoc.Characters.Last);
+                shape.Width = 450;
+
+                // ===== Apply Heading if selected =====
+                if (_headingLevel > 0)
+                {
+                    range.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+                    string styleName = $"Heading {_headingLevel}";
+                    range.set_Style(styleName);
+
+                    string headingText = Prompt.ShowDialog($"Enter text for {styleName}", "Word Addons - Heading");
+                    if (!string.IsNullOrEmpty(headingText))
+                    {
+                        range.InsertAfter(headingText + "\n");
+                    }
+                }
+
+                // ===== Insert text if InsertText is active =====
+                if (_insertTextProvider != null && _insertTextProvider())
+                {
+                    string userText = Prompt.ShowDialog("Enter text to insert", "Word Addons - Insert Text");
+                    if (!string.IsNullOrEmpty(userText))
+                    {
+                        range.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+                        range.InsertAfter(userText + "\n");
+                    }
+                }
+
+                if (!chkAppend.Checked)
+                {
+                    string uniqueFileName = $"Evidence_{DateTime.Now:yyyyMMdd_HHmmss_fff}.docx";
+                    string folderPath = SaveLocationManager.GetSaveFolder();
+                    string fullPath = Path.Combine(folderPath, uniqueFileName);
+
+                    _activeDoc.SaveAs2(fullPath);
+                    Clipboard.SetText(fullPath);
+                    lblStatus.Text = $"Saved & copied path: {uniqueFileName}";
+
+                    CloseAndCleanupWord();
+                }
+                else
+                {
+                    lblStatus.Text = "Appended. Click 'Save & Close' when finished.";
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Word error: " + ex.Message);
+                CloseAndCleanupWord();
+            }
+            finally
+            {
+                if (File.Exists(tempImg))
+                    File.Delete(tempImg);
+            }
+        }
+
+        private void SaveToImage(Bitmap capture)
+        {
+            using (SaveFileDialog sfd = new SaveFileDialog())
+            {
+                sfd.Filter = "PNG Image (*.png)|*.png|JPEG Image (*.jpg)|*.jpg";
+                sfd.Title = "Save Capture as Image";
+                sfd.FileName = $"Capture_{DateTime.Now:yyyyMMdd_HHmmss}.png";
+
+                if (sfd.ShowDialog() == DialogResult.OK)
+                {
+                    ImageFormat format = sfd.FilterIndex == 2 ? ImageFormat.Jpeg : ImageFormat.Png;
+                    capture.Save(sfd.FileName, format);
+                    lblStatus.Text = $"Image saved: {Path.GetFileName(sfd.FileName)}";
+                }
+            }
+        }
+
+        private void CloseAndCleanupWord()
+        {
+            try
+            {
+                if (_activeDoc != null)
+                {
+                    if (!_activeDoc.Saved) _activeDoc.Save();
+                    Marshal.ReleaseComObject(_activeDoc);
+                    _activeDoc = null;
+                }
+                if (_wordApp != null)
+                {
+                    _wordApp.Quit();
+                    Marshal.ReleaseComObject(_wordApp);
+                    _wordApp = null;
+                }
+            }
+            catch { }
+        }
+
+        // ===== Static hooks for menu =====
+        public static void SetInsertTextProvider(Func<bool> provider)
+        {
+            _insertTextProvider = provider;
+        }
+
+        public static void SetHeadingLevel(int level)
+        {
+            _headingLevel = level;
+        }
+    }
+}
+*****************************************************************
+

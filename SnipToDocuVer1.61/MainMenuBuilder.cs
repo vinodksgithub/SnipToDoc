@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Windows.Forms;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace ScreenCaptureUtility
 {
@@ -24,7 +23,7 @@ namespace ScreenCaptureUtility
             editMenu.DropDownItems.Add(undoItem);
             editMenu.DropDownItems.Add(redoItem);
 
-            // ===== Existing Connect Menu =====
+            // ===== Connect Menu =====
             ToolStripMenuItem connectMenu = new ToolStripMenuItem("Connect");
 
             ToolStripMenuItem connectAdoItem = new ToolStripMenuItem("Connect ADO");
@@ -35,45 +34,39 @@ namespace ScreenCaptureUtility
             uploadEvidenceItem.Click += (s, e) => OnUploadEvidence(form);
             connectMenu.DropDownItems.Add(uploadEvidenceItem);
 
-            ToolStripMenuItem delayMenu = new ToolStripMenuItem("DelayCapture");
+            // ===== Word Addons Menu =====
+            ToolStripMenuItem wordAddonsMenu = new ToolStripMenuItem("Word Addons");
 
-            ToolStripMenuItem delay0s = new ToolStripMenuItem("0s") { Checked = true };
-            ToolStripMenuItem delay3s = new ToolStripMenuItem("3s");
-            ToolStripMenuItem delay5s = new ToolStripMenuItem("5s");
-            ToolStripMenuItem delay9s = new ToolStripMenuItem("9s");
-
-            delay0s.Click += form.DelayMenu_Click;
-            delay3s.Click += form.DelayMenu_Click;
-            delay5s.Click += form.DelayMenu_Click;
-            delay9s.Click += form.DelayMenu_Click;
-
-            delayMenu.DropDownItems.AddRange(new ToolStripItem[]
+            ToolStripMenuItem insertTextItem = new ToolStripMenuItem("Insert text")
             {
-            delay0s, delay3s, delay5s, delay9s
-            });
+                CheckOnClick = true // toggle on/off
+            };
+            wordAddonsMenu.DropDownItems.Add(insertTextItem);
 
-            menuStrip.Items.Add(delayMenu);
+            wordAddonsMenu.DropDownItems.Add("Heading 1", null, (s, e) => SaveOptionsHandler.SetHeadingLevel(1));
+            wordAddonsMenu.DropDownItems.Add("Heading 2", null, (s, e) => SaveOptionsHandler.SetHeadingLevel(2));
+            wordAddonsMenu.DropDownItems.Add("Heading 3", null, (s, e) => SaveOptionsHandler.SetHeadingLevel(3));
 
-            // Add menus
+            // Attach InsertText toggle to SaveOptionsHandler
+            SaveOptionsHandler.SetInsertTextProvider(() => insertTextItem.Checked);
+
+            // ===== Add Menus to Strip =====
             menuStrip.Items.Add(editMenu);
             menuStrip.Items.Add(connectMenu);
+            menuStrip.Items.Add(wordAddonsMenu);
 
             return menuStrip;
         }
 
-
+        // Placeholder methods for Connect actions
         private static void OnConnectAdo(MainForm form)
         {
-            // Placeholder: open DB connection dialog
-            MessageBox.Show("Connect ADO clicked.",
-                            "Connect ADO", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Connect ADO clicked.");
         }
 
         private static void OnUploadEvidence(MainForm form)
         {
-            // Placeholder: upload evidence logic
-            MessageBox.Show("Upload Evidence clicked. ",
-                            "Upload Evidence", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Upload Evidence clicked.");
         }
     }
 }
