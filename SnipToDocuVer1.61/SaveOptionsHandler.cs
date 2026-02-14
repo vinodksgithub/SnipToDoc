@@ -26,7 +26,7 @@ namespace ScreenCaptureUtility
 
         // ===== Word Addons flags =====
         private static Func<bool> _insertTextProvider;
-        private static int _headingLevel = 0;
+        private static int _headingLevel = 3; // Default to Heading 3
 
         public SaveOptionsHandler(Button saveButton, CheckBox appendCheckBox, Label statusLabel, Panel parentPanel)
         {
@@ -164,28 +164,25 @@ namespace ScreenCaptureUtility
                 var shape = _activeDoc.InlineShapes.AddPicture(tempImg, Range: _activeDoc.Characters.Last);
                 shape.Width = 450;
 
-                // ===== Apply Heading if selected =====
-                if (_headingLevel > 0)
-                {
-                    range.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
-                    string styleName = $"Heading {_headingLevel}";
-                    range.set_Style(styleName);
-
-                    string headingText = Prompt.ShowDialog($"Enter text for {styleName}", "Word Addons - Heading");
-                    if (!string.IsNullOrEmpty(headingText))
-                    {
-                        range.InsertAfter(headingText + "\n");
-                    }
-                }
-
-                // ===== Insert text if InsertText is active =====
+                // ===== NEW LOGIC: Insert text with heading format if both are active =====
                 if (_insertTextProvider != null && _insertTextProvider())
                 {
-                    string userText = Prompt.ShowDialog("Enter text to insert", "Word Addons - Insert Text");
+                    string headingStyleName = $"Heading {_headingLevel}";
+                    string userText = Prompt.ShowDialog($"Enter text for {headingStyleName}", "Word Addons - Insert Text");
+
                     if (!string.IsNullOrEmpty(userText))
                     {
                         range.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+
+                        // Apply heading style to the range first
+                        range.set_Style(headingStyleName);
+
+                        // Insert the text with the heading style applied
                         range.InsertAfter(userText + "\n");
+
+                        // Reset to Normal style for next content
+                        range.Collapse(Word.WdCollapseDirection.wdCollapseEnd);
+                        range.set_Style("Normal");
                     }
                 }
 
